@@ -1,0 +1,116 @@
+
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+////
+////    VERTEX SHADER : STOLEN FROM NEIGHBOURING SHADERS
+////
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+
+struct input
+{
+   float2 video_size;
+   float2 texture_size;
+   float2 output_size;
+};
+
+void main_vertex
+(
+   float4 position	: POSITION,
+   out float4 oPosition : POSITION,
+   uniform float4x4 modelViewProj,
+
+   float2 tex : TEXCOORD,
+
+   uniform input IN,
+   out float2 oTexcoord : TEXCOORD,
+   out float2 oFakeResolution : TEXCOORD1
+)
+{
+   oPosition = mul(modelViewProj, position);
+	oTexcoord = tex;
+	oFakeResolution = IN.texture_size;
+}
+
+
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+////    EFFECT CONSTANTS : TWEAK THEM!
+////
+
+        // Define if pixelated or not (affects sampling)
+        //#define PIXELATED
+		//#define HALFPIXELOFFSET
+		
+		// Fake pixel Grid count (Width , Height)
+		//static const float2 FakeResolution = {400.0f ,240.0f }; // Replaced by input.video_size;
+		
+		// Hardness of the border effect
+		static const float2 OverscanMaskHardness = {24.0f ,24.0f };
+        // Pixel Hardness (default 4)
+        static const float PixelHardness = 4.0f;
+		// Intensity of the TV Corners (round-ness) deformation 
+		static const float TVDeformInstensity = 0.05f;
+		// How much R, G and B are offset : default is 0.333 pixels in fake-pixel-space
+		static const float ColorFringeIntensity = 0.5f;
+		// How much luminosity is output by a fake-pixel
+		static const float FakePixelMaskGain = 1.05f;
+		// How much luminosity is output between fake-pixels (adds to the fake-pixel value)
+		static const float FakePixelMaskOffset = 0.5f;
+		// How sharp will appear the pixels (Horizontal Sharpness, Vertical Sharpness A.K.A Scanlines)
+		static const float2 FakePixelMaskPower = {1.0f ,4.0f };
+		// How much the Fake-Pixel effect is Active (0.0 = normal image, 1.0 = full FakePixel Effect)
+		static const float FakePixelEffectBlend =0.75f ;
+////
+////
+////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+
+float3 TVEffect(float2 in_Position,float2 FakeResolution, sampler2D Texture) {
+
+	// TV Deformation
+	#ifdef HALFPIXELOFFSET
+		float offset = 0.5f;
+	#else
+		float offset = 0.0f;
+	#endif
+	float2 ScreenPos = in_Position + dot(in_Position-0.5f,in_Position-0.5f)*(in_Position-0.5f)* TVDeformInstensity;
+	
+	// Sampling 3 Images biased to simulate TV RGB Offset
+    #ifdef PIXELATED
+	float3 SMP_Red = tex2D(Texture, floor(ScreenPos*FakeResolution+offset)/FakeResolution).xyz;
+	float3 SMP_Green = tex2D(Texture, floor(ScreenPos*FakeResolution+offset)/FakeResolution + ((float2(ColorFringeIntensity,0.0f))/FakeResolution)).xyz;
+	float3 SMP_Blue = tex2D(Texture, floor(ScreenPos*FakeResolution+offset)/FakeResolution + ((float2(ColorFringeIntensity*2.0f,0.0f))/FakeResolution)).xyz;
+	#else 
+ 	float3 SMP_Red = tex2D(Texture, (ScreenPos)).xyz;
+	float3 SMP_Green = tex2D(Texture, (ScreenPos) + ((float2(ColorFringeIntensity,0.0f))/FakeResolution)).xyz;
+	float3 SMP_Blue = tex2D(Texture, (ScreenPos) + ((float2(ColorFringeIntensity*2.0f,0.0f))/FakeResolution)).xyz;
+    #endif
+
+	float2 ScreenMask = saturate((ScreenPos+(offset/FakeResolution))*(1.0f-ScreenPos)*OverscanMaskHardness);
+	
+
+	float2 PixelMaskR = saturate(frac(ScreenPos*FakeResolution+offset)*(1.0f-frac(ScreenPos*FakeResolution))*PixelHardness);
+	float2 PixelMaskG = saturate(frac(ScreenPos*FakeResolution+offset+float2(ColorFringeIntensity,0.0f))*(1.0f-frac(ScreenPos*FakeResolution+float2(ColorFringeIntensity,0.0f)))*PixelHardness);
+	float2 PixelMaskB = saturate(frac(ScreenPos*FakeResolution+offset+float2(ColorFringeIntensity*2.0f,0.0f))*(1.0f-frac(ScreenPos*FakeResolution+float2(ColorFringeIntensity*2.0f,0.0f)))*PixelHardness);
+
+
+	float3 PixelRGB = float3 ( 
+								((pow(PixelMaskR.x ,FakePixelMaskPower.x)*(pow(PixelMaskR.y,FakePixelMaskPower.y)) * FakePixelMaskGain)+FakePixelMaskOffset)  * SMP_Red.x ,
+								((pow(PixelMaskG.x ,FakePixelMaskPower.x)*(pow(PixelMaskG.y,FakePixelMaskPower.y)) * FakePixelMaskGain)+FakePixelMaskOffset)  * SMP_Green.y ,
+								((pow(PixelMaskB.x ,FakePixelMaskPower.x)*(pow(PixelMaskB.y,FakePixelMaskPower.y)) * FakePixelMaskGain)+FakePixelMaskOffset)  * SMP_Blue.z
+								);
+	
+	// Non-Pixelated Image
+	float3 ImageRGB = tex2D(Texture, ScreenPos).xyz;
+	
+	return lerp(ImageRGB, PixelRGB, FakePixelEffectBlend) * ScreenMask.x * ScreenMask.y;
+}
+
+float4 main_fragment (in float2 TexCoord : TEXCOORD, in float2 FakeResolution : TEXCOORD1 , in float2 wpos : WPOS, uniform sampler2D s_p : TEXUNIT0) : COLOR
+{
+    vec4 color = vec4(1.0f,1.0f,1.0f,1.0f);
+    color.xyz = TVEffect(TexCoord,FakeResolution, s_p );
+    //color.xyz = float3(TexCoord.x,TexCoord.y, 0.0f );
+	return color;
+}
